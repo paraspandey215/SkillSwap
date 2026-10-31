@@ -35,23 +35,22 @@ const allowedOrigins = [
   .filter(Boolean)
   .map(normalizeOrigin);
 
-const checkOrigin = (origin, callback) => {
-  if (!origin) {
-    return callback(null, true);
-  }
-
-  const normalizedOrigin = normalizeOrigin(origin);
-
-  if (allowedOrigins.includes(normalizedOrigin)) {
-    return callback(null, true);
-  }
-
-  console.log("Blocked CORS origin:", origin);
-  return callback(null, false);
-};
-
 const corsOptions = {
-  origin: checkOrigin,
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header (e.g. server-to-server)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const normalizedOrigin = normalizeOrigin(origin);
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    console.log("Blocked CORS origin:", origin);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
@@ -117,7 +116,6 @@ io.on("connection", (socket) => {
   const authorizedRooms = new Set();
 
   // JOIN ROOM WITH BOOKING AUTHORIZATION
-
   socket.on("join-room", async ({ bookingId, initialCode } = {}) => {
     try {
       const cleanBookingId = Number(bookingId);
@@ -217,7 +215,6 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("user-joined", {
         message: "A new participant joined the room",
       });
-
     } catch (error) {
       console.error("Join room error:", error.message);
 
@@ -299,7 +296,6 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("code-update", {
         code,
       });
-
     } catch (error) {
       console.error("Code save error:", error.message);
 
@@ -413,7 +409,6 @@ const startServer = async () => {
       console.log("Leaderboard API is enabled!");
       console.log("Allowed frontend origins:", allowedOrigins);
     });
-
   } catch (error) {
     console.error("Server startup failed:", error.message);
     process.exit(1);
