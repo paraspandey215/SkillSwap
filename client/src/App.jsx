@@ -1,11 +1,14 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import FindMentors from "./pages/FindMentors";
 import MySessions from "./pages/MySessions";
 import CreditWallet from "./pages/CreditWallet";
 import Leaderboard from "./pages/Leaderboard";
 import MyProfile from "./pages/MyProfile";
 import SettingsPage from "./pages/Settings";
+import socket from "./socket";
+import CollaborationRoom from "./pages/CollaborationRoom";
+import AuthPage from "./pages/AuthPage";
 
 import {
   LayoutDashboard,
@@ -29,46 +32,31 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-const mentors = [
-  {
-    name: "Aarav Sharma",
-    role: "Full Stack Developer",
-    skills: ["React", "Node.js"],
-    rating: "4.9",
-    sessions: 48,
-    credits: 5,
-    initials: "AS",
-    color: "bg-violet-100 text-violet-700",
-    online: true,
-  },
-  {
-    name: "Priya Verma",
-    role: "UI/UX Designer",
-    skills: ["Figma", "UI Design"],
-    rating: "4.8",
-    sessions: 36,
-    credits: 4,
-    initials: "PV",
-    color: "bg-pink-100 text-pink-700",
-    online: true,
-  },
-  {
-    name: "Rahul Mehta",
-    role: "Python Developer",
-    skills: ["Python", "Django"],
-    rating: "5.0",
-    sessions: 62,
-    credits: 6,
-    initials: "RM",
-    color: "bg-blue-100 text-blue-700",
-    online: false,
-  },
-];
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+const mapMentor = (mentor) => {
+  const name = mentor.name || "Mentor";
+  const colors = ["bg-violet-100 text-violet-700", "bg-pink-100 text-pink-700", "bg-blue-100 text-blue-700", "bg-emerald-100 text-emerald-700"];
+  const skills = Array.isArray(mentor.skills)
+    ? mentor.skills
+    : String(mentor.skills || "").split(",").map((skill) => skill.trim()).filter(Boolean);
+  return {
+    id: mentor.mentor_id || mentor.id || mentor.user_id,
+    name,
+    role: mentor.headline || mentor.role || "Skill Mentor",
+    skills,
+    credits: mentor.hourly_credits ?? mentor.credits ?? 0,
+    initials: name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
+    color: colors[(mentor.mentor_id || mentor.id || 0) % colors.length],
+    location: mentor.location || "",
+  };
+};
 
 const navigation = [
   { name: "Dashboard", icon: LayoutDashboard },
   { name: "Find Mentors", icon: Search },
   { name: "My Sessions", icon: CalendarDays },
+  { name: "Live Collaboration", icon: Users },
   { name: "Credit Wallet", icon: Wallet },
   { name: "Leaderboard", icon: Trophy },
 ];
@@ -77,6 +65,102 @@ function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [search, setSearch] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [socketStatus, setSocketStatus] = useState("Connecting...");
+  const [authUser, setAuthUser] = useState(() => {
+  const token = localStorage.getItem("token");
+
+  if (!token) return null;
+
+  try {
+    return JSON.parse(localStorage.getItem("user"));
+  } catch {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    return null;
+  }
+});
+  const [mentors, setMentors] = useState([]);
+  const [mentorsLoading, setMentorsLoading] = useState(true);
+  const [mentorError, setMentorError] = useState("");
+  const [dashboardBookings, setDashboardBookings] = useState([]);
+
+  // Connect Socket.io only after the user is logged in.
+  useEffect(() => {
+    if (!authUser || !localStorage.getItem("token")) {
+      socket.disconnect();
+      setSocketStatus("Disconnected");
+      return;
+    }
+
+    const handleConnect = () => {
+      setSocketStatus("Connected");
+      console.log("Socket connected:", socket.id);
+    };
+
+    const handleDisconnect = () => {
+      setSocketStatus("Disconnected");
+    };
+
+    const handleConnectError = (error) => {
+      setSocketStatus("Connection failed");
+      console.error("Socket connection error:", error.message);
+    };
+
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("connect_error", handleConnectError);
+    socket.connect();
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("connect_error", handleConnectError);
+      socket.disconnect();
+    };
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const loadDashboardData = async () => {
+      try {
+        setMentorsLoading(true);
+        setMentorError("");
+        const mentorResponse = await fetch(`${API_URL}/api/mentors`);
+        const mentorData = await mentorResponse.json();
+        if (!mentorResponse.ok || mentorData.success === false) {
+          throw new Error(mentorData.message || "Unable to load mentors.");
+        }
+        const mentorRows = Array.isArray(mentorData) ? mentorData : mentorData.mentors || [];
+        setMentors(mentorRows.map(mapMentor));
+      } catch (error) {
+        setMentorError(error.message || "Unable to load mentors.");
+        setMentors([]);
+      } finally {
+        setMentorsLoading(false);
+      }
+
+      try {
+        const token = localStorage.getItem("token");
+        const role = String(authUser.role || "").toLowerCase();
+        const endpoint = ["mentor", "both"].includes(role)
+          ? "/api/bookings/received"
+          : "/api/bookings/my-bookings";
+        const response = await fetch(`${API_URL}${endpoint}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (response.ok && data.success !== false) {
+          const rows = Array.isArray(data) ? data : data.bookings || data.receivedBookings || data.myBookings || data.data || [];
+          setDashboardBookings(rows);
+        } else {
+          setDashboardBookings([]);
+        }
+      } catch {
+        setDashboardBookings([]);
+      }
+    };
+    loadDashboardData();
+  }, [authUser]);
 
   const filteredMentors = mentors.filter((mentor) =>
     `${mentor.name} ${mentor.role} ${mentor.skills.join(" ")}`
@@ -87,6 +171,18 @@ function App() {
   const changePage = (page) => {
     setActivePage(page);
     setMobileMenu(false);
+  };
+
+  // Log out the current user and return to the authentication page.
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    socket.disconnect();
+    setAuthUser(null);
+    setActivePage("Dashboard");
+    setMobileMenu(false);
+    setSocketStatus("Disconnected");
   };
 
   const SidebarContent = () => (
@@ -134,7 +230,7 @@ function App() {
 
                 {item.name === "My Sessions" && (
                   <span className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-700">
-                    2
+                    {dashboardBookings.filter((booking) => String(booking.status).toLowerCase() === "pending").length}
                   </span>
                 )}
               </button>
@@ -199,6 +295,11 @@ function App() {
     </>
   );
 
+  // Show authentication before rendering the existing dashboard.
+  if (!authUser) {
+    return <AuthPage onAuthSuccess={setAuthUser} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
 
@@ -252,6 +353,21 @@ function App() {
           </div>
 
           <div className="flex items-center gap-3 md:gap-5">
+            <div
+              className="hidden items-center gap-2 rounded-full border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 sm:flex"
+              title="Socket.io connection status"
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  socketStatus === "Connected"
+                    ? "bg-emerald-500"
+                    : socketStatus === "Connecting..."
+                    ? "bg-amber-400"
+                    : "bg-rose-500"
+                }`}
+              />
+              Live: {socketStatus}
+            </div>
             <button className="relative rounded-xl p-2.5 text-slate-500 hover:bg-slate-100">
               <Bell size={20} />
               <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white" />
@@ -264,15 +380,20 @@ function App() {
               className="flex items-center gap-2"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700">
-                PP
+                {(authUser.name || "SU")
+                  .split(" ")
+                  .map((part) => part[0])
+                  .join("")
+                  .slice(0, 2)
+                  .toUpperCase()}
               </div>
 
               <div className="hidden text-left sm:block">
                 <p className="text-sm font-semibold text-slate-800">
-                  Paras Pandey
+                  {authUser.name || "SkillSwap User"}
                 </p>
                 <p className="text-xs text-slate-400">
-                  Learner
+                  {authUser.role || "Member"}
                 </p>
               </div>
 
@@ -280,6 +401,15 @@ function App() {
                 size={15}
                 className="hidden text-slate-400 sm:block"
               />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
+              title="Log out of SkillSwap"
+            >
+              Logout
             </button>
           </div>
         </header>
@@ -289,6 +419,8 @@ function App() {
 
           {activePage === "Find Mentors" ? (
            <FindMentors />
+           ) : activePage === "Live Collaboration" ? (
+  <CollaborationRoom />
            ) : activePage === "My Sessions" ? (
   <MySessions />
 ) : activePage === "Credit Wallet" ? (
@@ -312,7 +444,7 @@ function App() {
                   </div>
 
                   <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
-                    Welcome back, Paras! 👋
+                    Welcome back, {authUser.name || "Learner"}! 👋
                   </h1>
 
                   <p className="mt-2 text-sm text-slate-500">
@@ -466,7 +598,9 @@ function App() {
 
                 {/* Mentor Cards */}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {filteredMentors.map((mentor) => (
+                  {mentorsLoading ? (
+                    <p className="col-span-full rounded-xl bg-white p-8 text-center text-sm text-slate-500">Loading mentors...</p>
+                  ) : filteredMentors.map((mentor) => (
                     <div
                       key={mentor.name}
                       className="rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-1 hover:border-violet-200 hover:shadow-lg hover:shadow-slate-200/60"
@@ -482,13 +616,7 @@ function App() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1 text-sm font-semibold text-slate-700">
-                          <Star
-                            size={15}
-                            className="fill-amber-400 text-amber-400"
-                          />
-                          {mentor.rating}
-                        </div>
+                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">Mentor</span>
                       </div>
 
                       <h3 className="mt-4 font-bold text-slate-900">
@@ -513,7 +641,7 @@ function App() {
                       <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
                         <div>
                           <p className="text-xs text-slate-400">
-                            {mentor.sessions} sessions
+                            {mentor.location || "SkillSwap community"}
                           </p>
 
                           <p className="mt-1 text-sm font-semibold text-slate-700">
@@ -531,9 +659,9 @@ function App() {
                     </div>
                   ))}
 
-                  {filteredMentors.length === 0 && (
+                  {!mentorsLoading && filteredMentors.length === 0 && (
                     <p className="col-span-full rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                      No mentors found. Try another search.
+                      {mentorError || "No mentors found. Try another search."}
                     </p>
                   )}
                 </div>
@@ -555,38 +683,25 @@ function App() {
                   <CalendarDays className="text-violet-600" size={22} />
                 </div>
 
-                <div className="flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-                      <Code2 size={22} />
+                <div className="space-y-3">
+                  {dashboardBookings.filter((booking) => String(booking.status).toLowerCase() === "accepted").length === 0 ? (
+                    <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No accepted sessions yet. Your confirmed sessions will appear here.</p>
+                  ) : dashboardBookings.filter((booking) => String(booking.status).toLowerCase() === "accepted").slice(0, 3).map((booking) => (
+                    <div key={booking.id || booking.booking_id} className="flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Code2 size={22} /></div>
+                        <div>
+                          <h3 className="text-sm font-semibold text-slate-800">{booking.session_title || booking.title || "Mentorship Session"}</h3>
+                          <p className="mt-1 text-xs text-slate-500">{["mentor", "both"].includes(String(authUser.role || "").toLowerCase()) ? `With ${booking.student_name || "Student"}` : `With ${booking.mentor_name || "Mentor"}`}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                        <span className="flex items-center gap-1"><CalendarDays size={14} />{booking.session_date ? new Date(booking.session_date).toLocaleDateString("en-IN") : "Date pending"}</span>
+                        <span className="flex items-center gap-1"><Clock3 size={14} />{String(booking.start_time || "").slice(0, 5) || "Time pending"}</span>
+                        <span className="rounded-full bg-emerald-100 px-3 py-1.5 font-semibold text-emerald-700">Accepted</span>
+                      </div>
                     </div>
-
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-800">
-                        React Advanced Concepts
-                      </h3>
-
-                      <p className="mt-1 text-xs text-slate-500">
-                        With Aarav Sharma
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
-                    <span className="flex items-center gap-1">
-                      <CalendarDays size={14} />
-                      31 Oct, 2026
-                    </span>
-
-                    <span className="flex items-center gap-1">
-                      <Clock3 size={14} />
-                      4:00 PM
-                    </span>
-
-                    <span className="rounded-full bg-emerald-100 px-3 py-1.5 font-semibold text-emerald-700">
-                      Confirmed
-                    </span>
-                  </div>
+                  ))}
                 </div>
               </section>
 

@@ -1,6 +1,7 @@
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const { db } = require("../config/db");
 
 const router = express.Router();
@@ -14,7 +15,7 @@ router.post("/register", async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
-    // 1. Validate required fields
+    // Validate required fields
     if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -22,7 +23,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 2. Validate input types
+    // Validate input types
     if (
       typeof name !== "string" ||
       typeof email !== "string" ||
@@ -34,7 +35,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 3. Clean input values
+    // Clean input values
     const cleanName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -52,7 +53,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 4. Validate email
+    // Validate email
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailRegex.test(normalizedEmail)) {
@@ -62,22 +63,15 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 5. Validate password
-    if (password.length < 8) {
+    // Validate password
+    if (password.length < 8 || password.length > 72) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 8 characters",
+        message: "Password must be between 8 and 72 characters",
       });
     }
 
-    if (password.length > 72) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must not exceed 72 characters",
-      });
-    }
-
-    // 6. Validate user role
+    // Validate user role
     const allowedRoles = ["student", "mentor", "both"];
     const userRole = role || "student";
 
@@ -91,7 +85,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 7. Check if email already exists
+    // Check if email already exists
     const [existingUsers] = await db.execute(
       "SELECT id FROM users WHERE email = ?",
       [normalizedEmail]
@@ -104,17 +98,16 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // 8. Hash password
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // 9. Save user in MySQL database
+    // Save user in MySQL
     const [result] = await db.execute(
       `INSERT INTO users (name, email, password, role)
        VALUES (?, ?, ?, ?)`,
       [cleanName, normalizedEmail, hashedPassword, userRole]
     );
 
-    // 10. Send success response
     return res.status(201).json({
       success: true,
       message: "User registered successfully",
@@ -127,15 +120,123 @@ router.post("/register", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Registration Error:", error);
+    console.error("Registration Error:", error.message);
 
-    // Handle duplicate email database error
     if (error.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
         success: false,
         message: "Email already registered",
       });
     }
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// ========================================
+// USER LOGIN API
+// POST /api/auth/login
+// ========================================
+
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate required fields and types
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !email.trim() ||
+      !password
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid email and password are required",
+      });
+    }
+
+    // Check JWT secret configuration
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is missing in .env");
+
+      return res.status(500).json({
+        success: false,
+        message: "Authentication configuration error",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address",
+      });
+    }
+
+    // Find user in database
+    const [users] = await db.execute(
+      `SELECT id, name, email, password, role
+       FROM users
+       WHERE email = ?`,
+      [normalizedEmail]
+    );
+
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      });
+    }
+
+    const user = users[0];
+
+    // Compare password with hashed password
+    const isMatch = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d",
+      }
+    );
+
+    // Send login response
+    return res.status(200).json({
+      success: true,
+      message: "Login successful",
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+
+  } catch (error) {
+    console.error("Login Error:", error.message);
 
     return res.status(500).json({
       success: false,
