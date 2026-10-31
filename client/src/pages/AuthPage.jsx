@@ -1,4 +1,7 @@
+
 import { useState } from "react";
+
+const API_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, "");
 
 function AuthPage({ onAuthSuccess }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -12,13 +15,19 @@ function AuthPage({ onAuthSuccess }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage("");
+
+    if (!API_URL) {
+      setMessage("Server configuration is missing. Please contact support.");
+      return;
+    }
+
     setLoading(true);
 
     try {
       const endpoint = isLogin ? "login" : "register";
 
       const response = await fetch(
-        `http://localhost:5000/api/auth/${endpoint}`,
+        `${API_URL}/api/auth/${endpoint}`,
         {
           method: "POST",
           headers: {
@@ -48,7 +57,10 @@ function AuthPage({ onAuthSuccess }) {
         setPassword("");
       }
     } catch (error) {
-      setMessage(error.message || "Unable to connect to server.");
+      console.error("Authentication error:", error);
+      setMessage(
+        error.message || "Unable to connect to server. Please try again."
+      );
     } finally {
       setLoading(false);
     }
