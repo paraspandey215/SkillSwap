@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Wallet,
   TrendingUp,
@@ -18,88 +17,83 @@ import {
   CircleHelp,
 } from "lucide-react";
 
-const transactions = [
-  {
-    id: 1,
-    title: "Welcome Bonus",
-    description: "Credits received for joining SkillSwap",
-    type: "Earned",
-    category: "Bonus",
-    credits: 10,
-    date: "30 Oct, 2026",
-    time: "10:30 AM",
-    icon: Gift,
-    color: "bg-violet-100 text-violet-700",
-  },
-  {
-    id: 2,
-    title: "React Mentorship Session",
-    description: "Session with Aarav Sharma",
-    type: "Spent",
-    category: "Learning",
-    credits: 5,
-    date: "28 Oct, 2026",
-    time: "4:00 PM",
-    icon: Code2,
-    color: "bg-blue-100 text-blue-700",
-  },
-  {
-    id: 3,
-    title: "Mentorship Reward",
-    description: "Helped a student with HTML and CSS",
-    type: "Earned",
-    category: "Teaching",
-    credits: 8,
-    date: "26 Oct, 2026",
-    time: "2:15 PM",
-    icon: BookOpen,
-    color: "bg-emerald-100 text-emerald-700",
-  },
-  {
-    id: 4,
-    title: "UI/UX Design Session",
-    description: "Session with Priya Verma",
-    type: "Spent",
-    category: "Learning",
-    credits: 4,
-    date: "24 Oct, 2026",
-    time: "11:00 AM",
-    icon: Palette,
-    color: "bg-pink-100 text-pink-700",
-  },
-  {
-    id: 5,
-    title: "Referral Bonus",
-    description: "Reward for inviting a new learner",
-    type: "Earned",
-    category: "Bonus",
-    credits: 6,
-    date: "22 Oct, 2026",
-    time: "9:45 AM",
-    icon: Gift,
-    color: "bg-orange-100 text-orange-700",
-  },
-  {
-    id: 6,
-    title: "Python Mentorship Session",
-    description: "Session with Rahul Mehta",
-    type: "Spent",
-    category: "Learning",
-    credits: 3,
-    date: "20 Oct, 2026",
-    time: "3:00 PM",
-    icon: Code2,
-    color: "bg-blue-100 text-blue-700",
-  },
-];
-
 const filters = ["All", "Earned", "Spent"];
 
 function CreditWallet() {
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
   const [activeFilter, setActiveFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const [selectedTransaction, setSelectedTransaction] =
-    useState(null);
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [availableCredits, setAvailableCredits] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const loadWallet = async () => {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        setError("Please log in again to view your wallet.");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError("");
+        const headers = { Authorization: `Bearer ${token}` };
+        const [walletResponse, transactionResponse] = await Promise.all([
+          fetch(`${API_URL}/api/wallet`, { headers }),
+          fetch(`${API_URL}/api/wallet/transactions`, { headers }),
+        ]);
+
+        const walletData = await walletResponse.json();
+        const transactionData = await transactionResponse.json();
+
+        if (!walletResponse.ok || !walletData.success) {
+          throw new Error(walletData.message || "Unable to load wallet balance.");
+        }
+        if (!transactionResponse.ok || transactionData.success === false) {
+          throw new Error(transactionData.message || "Unable to load transactions.");
+        }
+
+        setAvailableCredits(Number(walletData.wallet?.balance) || 0);
+        const rows = Array.isArray(transactionData.transactions)
+          ? transactionData.transactions
+          : [];
+
+        setTransactions(rows.map((item) => {
+          const earned = String(item.transaction_type || "").toLowerCase() === "earned";
+          const description = item.description || "Credit transaction";
+          const title = description.split(/[.!?]/)[0] || "Credit transaction";
+          const dateValue = item.created_at ? new Date(item.created_at) : null;
+          return {
+            id: item.id,
+            bookingId: item.booking_id,
+            title,
+            description,
+            type: earned ? "Earned" : "Spent",
+            category: earned ? "Teaching / Reward" : "Learning",
+            credits: Number(item.credits) || 0,
+            date: dateValue && !Number.isNaN(dateValue.getTime())
+              ? dateValue.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+              : "Date unavailable",
+            time: dateValue && !Number.isNaN(dateValue.getTime())
+              ? dateValue.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+              : "",
+            icon: earned ? BookOpen : Code2,
+            color: earned ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700",
+          };
+        }));
+      } catch (err) {
+        setError(err.message || "Unable to load wallet data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadWallet();
+  }, []);
 
   const totalEarned = transactions
     .filter((item) => item.type === "Earned")
@@ -109,26 +103,19 @@ function CreditWallet() {
     .filter((item) => item.type === "Spent")
     .reduce((sum, item) => sum + item.credits, 0);
 
-  const availableCredits = 25;
-
-  const filteredTransactions = transactions.filter((item) => {
+  const filteredTransactions = useMemo(() => transactions.filter((item) => {
     const matchesFilter =
       activeFilter === "All" || item.type === activeFilter;
-
     const matchesSearch =
       `${item.title} ${item.description} ${item.category}`
         .toLowerCase()
         .includes(search.toLowerCase());
-
     return matchesFilter && matchesSearch;
-  });
+  }), [transactions, activeFilter, search]);
 
   const getCount = (filter) => {
     if (filter === "All") return transactions.length;
-
-    return transactions.filter(
-      (item) => item.type === filter
-    ).length;
+    return transactions.filter((item) => item.type === filter).length;
   };
 
   return (
@@ -277,7 +264,19 @@ function CreditWallet() {
         {/* Transactions */}
         <div className="mt-5 divide-y divide-slate-100">
 
-          {filteredTransactions.map((transaction) => {
+          {loading && (
+            <p className="py-8 text-center text-sm text-slate-500">
+              Loading your wallet transactions...
+            </p>
+          )}
+
+          {!loading && error && (
+            <p className="py-8 text-center text-sm text-rose-600">
+              {error}
+            </p>
+          )}
+
+          {!loading && !error && filteredTransactions.map((transaction) => {
             const Icon = transaction.icon;
             const earned = transaction.type === "Earned";
 
@@ -336,7 +335,7 @@ function CreditWallet() {
           })}
 
           {/* Empty State */}
-          {filteredTransactions.length === 0 && (
+          {!loading && !error && filteredTransactions.length === 0 && (
             <div className="py-12 text-center">
               <History
                 size={35}
@@ -447,7 +446,7 @@ function CreditWallet() {
 
               <DetailRow
                 label="Transaction ID"
-                value={`SS-${selectedTransaction.id}2026`}
+                value={String(selectedTransaction.id)}
               />
             </div>
 

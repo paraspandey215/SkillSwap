@@ -77,7 +77,9 @@ function FindMentors() {
 
       const formattedMentors = (data.mentors || []).map(
         (mentor, index) => ({
-          id: Number(mentor.mentor_id || mentor.user_id),
+          // bookings.mentor_id stores users.id, not mentor_profiles.id.
+          id: Number(mentor.user_id ?? mentor.mentor_id),
+          mentorProfileId: Number(mentor.mentor_id ?? 0),
           name: mentor.name || "Unknown Mentor",
           role: mentor.headline || "Mentor",
           skills: (mentor.skills || "")
@@ -221,6 +223,11 @@ function FindMentors() {
     e.preventDefault();
 
     if (!selectedMentor) return;
+
+    if (!Number.isInteger(selectedMentor.id) || selectedMentor.id <= 0) {
+      setNotice("Invalid mentor account ID. Please refresh the mentors list and try again.");
+      return;
+    }
 
     const token = localStorage.getItem("token");
 

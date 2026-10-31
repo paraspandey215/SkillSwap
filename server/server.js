@@ -14,13 +14,17 @@ const profileRoutes = require("./routes/profileRoutes");
 const mentorRoutes = require("./routes/mentorRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const walletRoutes = require("./routes/walletRoutes");
+const leaderboardRoutes = require("./routes/leaderboardRoutes");
 
 const app = express();
 
 // Create HTTP server
 const server = http.createServer(app);
 
-// Middleware
+// ==========================================
+// MIDDLEWARE
+// ==========================================
+
 app.use(
   cors({
     origin: "http://localhost:5173",
@@ -30,7 +34,10 @@ app.use(
 
 app.use(express.json());
 
-// Initialize Socket.io
+// ==========================================
+// SOCKET.IO INITIALIZATION
+// ==========================================
+
 const io = new Server(server, {
   cors: {
     origin: "http://localhost:5173",
@@ -124,7 +131,6 @@ io.on("connection", (socket) => {
       }
 
       const booking = bookings[0];
-
       const userId = socket.user.id;
 
       const isParticipant =
@@ -172,7 +178,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Leave any previously joined collaboration rooms
+      // Leave previously joined collaboration rooms
       for (const previousRoom of authorizedRooms) {
         socket.leave(previousRoom);
 
@@ -185,7 +191,6 @@ io.on("connection", (socket) => {
 
       // Join authorized room
       await socket.join(roomId);
-
       authorizedRooms.add(roomId);
 
       console.log(
@@ -251,7 +256,6 @@ io.on("connection", (socket) => {
         socket.emit("room-error", {
           message: "Booking no longer exists.",
         });
-
         return;
       }
 
@@ -268,7 +272,6 @@ io.on("connection", (socket) => {
         socket.emit("room-error", {
           message: "Your collaboration access has expired.",
         });
-
         return;
       }
 
@@ -284,7 +287,6 @@ io.on("connection", (socket) => {
         socket.emit("room-error", {
           message: "Collaboration room not found.",
         });
-
         return;
       }
 
@@ -358,6 +360,10 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/mentors", mentorRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/wallet", walletRoutes);
+app.use("/api/leaderboard", leaderboardRoutes);
+
+// Leaderboard API
+app.use("/api/leaderboard", leaderboardRoutes);
 
 // ==========================================
 // 8. TEST ROUTE
@@ -373,6 +379,7 @@ app.get("/", (req, res) => {
     acceptedBookingOnly: "Enabled",
     initialCodeSync: "Enabled",
     codePersistence: "Enabled",
+    leaderboardAPI: "Enabled",
   });
 });
 
@@ -384,6 +391,10 @@ const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET is missing in .env");
+    }
+
     await connectDB();
 
     server.listen(PORT, () => {
@@ -394,6 +405,7 @@ const startServer = async () => {
       console.log("Accepted Booking Verification is enabled!");
       console.log("Initial Code Synchronization is enabled!");
       console.log("MySQL Code Persistence is enabled!");
+      console.log("Leaderboard API is enabled!");
     });
 
   } catch (error) {

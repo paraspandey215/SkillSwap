@@ -6,12 +6,17 @@ const { db } = require("../config/db");
 
 const router = express.Router();
 
+const STARTING_LEARNER_CREDITS = 500;
+
 // ========================================
 // USER REGISTRATION API
 // POST /api/auth/register
 // ========================================
 
 router.post("/register", async (req, res) => {
+  let connection;
+  let transactionStarted = false;
+
   try {
     const { name, email, password, role } = req.body;
 
@@ -23,7 +28,6 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Validate input types
     if (
       typeof name !== "string" ||
       typeof email !== "string" ||
@@ -35,7 +39,6 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Clean input values
     const cleanName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -53,7 +56,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Validate email
+    // Correct email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailRegex.test(normalizedEmail)) {
@@ -63,7 +66,6 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Validate password
     if (password.length < 8 || password.length > 72) {
       return res.status(400).json({
         success: false,
@@ -71,7 +73,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Validate user role
+    // Validate role
     const allowedRoles = ["student", "mentor", "both"];
     const userRole = role || "student";
 
@@ -85,7 +87,7 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Check if email already exists
+    // Check existing email
     const [existingUsers] = await db.execute(
       "SELECT id FROM users WHERE email = ?",
       [normalizedEmail]
@@ -101,18 +103,81 @@ router.post("/register", async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Save user in MySQL
-    const [result] = await db.execute(
+    // Start database transaction
+    connection = await db.getConnection();
+
+    await connection.beginTransaction();
+    transactionStarted = true;
+
+    // Create user
+    const [result] = await connection.execute(
       `INSERT INTO users (name, email, password, role)
        VALUES (?, ?, ?, ?)`,
       [cleanName, normalizedEmail, hashedPassword, userRole]
     );
 
+    const newUserId = result.insertId;
+
+    // ========================================
+    // CREATE WALLET
+    // Student = 500 credits
+    // Both = 500 credits
+    // Mentor only = 0 credits
+    // ========================================
+
+    const startingCredits =
+      userRole === "student" || userRole === "both"
+        ? STARTING_LEARNER_CREDITS
+        : 0;
+
+    await connection.execute(
+      `INSERT INTO wallets (user_id, balance)
+       VALUES (?, ?)`,
+      [newUserId, startingCredits]
+    );
+
+    // ========================================
+    // CREATE MENTOR PROFILE
+    // For mentor and both roles
+    // ========================================
+
+    if (userRole === "mentor" || userRole === "both") {
+      await connection.execute(
+        `INSERT INTO mentor_profiles
+        (
+          user_id,
+          headline,
+          skills,
+          languages,
+          experience,
+          availability,
+          hourly_credits,
+          description
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newUserId,
+          "New Mentor",
+          "",
+          "English, Hindi",
+          0,
+          "Not specified",
+          5,
+          "Mentor profile. Update your details from your profile settings.",
+        ]
+      );
+    }
+
+    // Commit transaction
+    await connection.commit();
+    transactionStarted = false;
+
     return res.status(201).json({
       success: true,
       message: "User registered successfully",
+      startingCredits,
       user: {
-        id: result.insertId,
+        id: newUserId,
         name: cleanName,
         email: normalizedEmail,
         role: userRole,
@@ -120,7 +185,12 @@ router.post("/register", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Registration Error:", error.message);
+    if (connection && transactionStarted) {
+      await connection.rollback();
+      transactionStarted = false;
+    }
+
+    console.error("Registration Error:", error);
 
     if (error.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
@@ -133,6 +203,11 @@ router.post("/register", async (req, res) => {
       success: false,
       message: "Internal server error",
     });
+
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 });
 
@@ -145,7 +220,6 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate required fields and types
     if (
       typeof email !== "string" ||
       typeof password !== "string" ||
@@ -158,7 +232,6 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Check JWT secret configuration
     if (!process.env.JWT_SECRET) {
       console.error("JWT_SECRET is missing in .env");
 
@@ -170,7 +243,7 @@ router.post("/login", async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Validate email format
+    // Correct email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     if (!emailRegex.test(normalizedEmail)) {
@@ -180,7 +253,7 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Find user in database
+    // Find user
     const [users] = await db.execute(
       `SELECT id, name, email, password, role
        FROM users
@@ -197,7 +270,7 @@ router.post("/login", async (req, res) => {
 
     const user = users[0];
 
-    // Compare password with hashed password
+    // Verify password
     const isMatch = await bcrypt.compare(
       password,
       user.password
@@ -222,7 +295,6 @@ router.post("/login", async (req, res) => {
       }
     );
 
-    // Send login response
     return res.status(200).json({
       success: true,
       message: "Login successful",
@@ -244,5 +316,9 @@ router.post("/login", async (req, res) => {
     });
   }
 });
+
+// ========================================
+// EXPORT ROUTER
+// ========================================
 
 module.exports = router;

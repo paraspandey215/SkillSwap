@@ -15,6 +15,8 @@ import {
   AlertCircle,
   Check,
   X,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
@@ -72,7 +74,7 @@ const getInitials = (name = "SkillSwap User") =>
 
 const getToken = () => localStorage.getItem("token");
 
-function MySessions() {
+function MySessions({ onOpenCollaboration }) {
   const [activeFilter, setActiveFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [selectedSession, setSelectedSession] = useState(null);
@@ -235,6 +237,56 @@ function MySessions() {
       setError(err.message || "Unable to update booking.");
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // The numeric booking ID is used by the access API.
+  // The shared Socket.io room name is booking-<bookingId>.
+  const getRoomId = (bookingId) => `booking-${bookingId}`;
+
+  const handleCopyRoomId = async (bookingId) => {
+    const roomId = getRoomId(bookingId);
+    try {
+      await navigator.clipboard.writeText(roomId);
+      setNotice(`Room ID ${roomId} copied. Share it with the other participant.`);
+      setError("");
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = roomId;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand("copy");
+        setNotice(`Room ID ${roomId} copied. Share it with the other participant.`);
+        setError("");
+      } catch {
+        setError(`Copy failed. Room ID: ${roomId}`);
+      } finally {
+        document.body.removeChild(textArea);
+      }
+    }
+  };
+
+  const handleOpenCollaboration = (bookingId) => {
+    const numericBookingId = Number(bookingId);
+    if (!Number.isSafeInteger(numericBookingId) || numericBookingId <= 0) {
+      setError("Invalid booking ID. Refresh your sessions and try again.");
+      return;
+    }
+
+    localStorage.setItem("skillswap_active_booking_id", String(numericBookingId));
+
+    if (typeof onOpenCollaboration === "function") {
+      onOpenCollaboration(numericBookingId);
+    } else {
+      window.dispatchEvent(
+        new CustomEvent("skillswap:open-collaboration", {
+          detail: { bookingId: numericBookingId },
+        })
+      );
+      setNotice("Room selected. Open Live Collaboration from the sidebar to join.");
     }
   };
 
@@ -442,9 +494,33 @@ function MySessions() {
                     </div>
 
                     <div className="mt-4 flex flex-col justify-between gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center">
-                      <p className="text-xs text-slate-400">
-                        Booking ID: #{session.id}
-                      </p>
+                      <div className="flex flex-col gap-2">
+                        <p className="text-xs text-slate-400">
+                          Booking ID: #{session.id}
+                        </p>
+                        {isAccepted && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-semibold text-violet-700">
+                              Room ID: {getRoomId(session.id)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyRoomId(session.id)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-violet-300 hover:text-violet-700"
+                              title="Copy collaboration room ID"
+                            >
+                              <Copy size={13} /> Copy ID
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCollaboration(session.id)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700"
+                            >
+                              <ExternalLink size={13} /> Join Room
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <div className="flex flex-wrap items-center gap-3">
                         <p className="text-sm font-semibold text-slate-700">
                           {session.credits} Credits
@@ -545,7 +621,37 @@ function MySessions() {
               <DetailRow icon={CalendarDays} label="Date" value={selectedSession.date} />
               <DetailRow icon={Clock3} label="Time" value={selectedSession.time || "Not specified"} />
               <DetailRow icon={Wallet} label="Credits" value={`${selectedSession.credits} Credits`} />
+              {selectedSession.status === "Accepted" && (
+                <DetailRow
+                  icon={Code2}
+                  label="Collaboration Room ID"
+                  value={getRoomId(selectedSession.id)}
+                />
+              )}
             </div>
+
+            {selectedSession.status === "Accepted" && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCopyRoomId(selectedSession.id)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-semibold text-slate-700 hover:border-violet-300 hover:text-violet-700"
+                >
+                  <Copy size={16} /> Copy Room ID
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bookingId = selectedSession.id;
+                    setSelectedSession(null);
+                    handleOpenCollaboration(bookingId);
+                  }}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-violet-700"
+                >
+                  <ExternalLink size={16} /> Join Room
+                </button>
+              </div>
+            )}
 
             <div className="mt-5 flex items-center justify-between">
               <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${getStatusStyle(selectedSession.status)}`}>

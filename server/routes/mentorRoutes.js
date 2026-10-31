@@ -5,7 +5,11 @@ const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
+// ========================================
 // POST /api/mentors
+// CREATE MENTOR PROFILE
+// ========================================
+
 router.post("/", authMiddleware, async (req, res) => {
   try {
     const {
@@ -18,7 +22,30 @@ router.post("/", authMiddleware, async (req, res) => {
       description,
     } = req.body;
 
-    if (!skills || !languages) {
+    const userId = req.user.id;
+
+    // Only mentor and both roles can create profiles
+    const [users] = await db.execute(
+      "SELECT role FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (
+      users.length === 0 ||
+      !["mentor", "both"].includes(users[0].role)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only mentors can create mentor profiles",
+      });
+    }
+
+    if (
+      typeof skills !== "string" ||
+      !skills.trim() ||
+      typeof languages !== "string" ||
+      !languages.trim()
+    ) {
       return res.status(400).json({
         success: false,
         message: "Skills and languages are required",
@@ -26,8 +53,6 @@ router.post("/", authMiddleware, async (req, res) => {
     }
 
     if (
-      typeof skills !== "string" ||
-      typeof languages !== "string" ||
       (headline !== undefined && typeof headline !== "string") ||
       (availability !== undefined && typeof availability !== "string") ||
       (description !== undefined && typeof description !== "string")
@@ -35,21 +60,6 @@ router.post("/", authMiddleware, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid input format",
-      });
-    }
-
-    const userId = req.user.id;
-
-    // Check whether mentor profile already exists
-    const [existing] = await db.execute(
-      "SELECT id FROM mentor_profiles WHERE user_id = ?",
-      [userId]
-    );
-
-    if (existing.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "Mentor profile already exists",
       });
     }
 
@@ -68,10 +78,31 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
+    // Check existing profile
+    const [existing] = await db.execute(
+      "SELECT id FROM mentor_profiles WHERE user_id = ?",
+      [userId]
+    );
+
+    if (existing.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Mentor profile already exists",
+      });
+    }
+
     const [result] = await db.execute(
       `INSERT INTO mentor_profiles
-      (user_id, headline, skills, languages, experience,
-       availability, hourly_credits, description)
+      (
+        user_id,
+        headline,
+        skills,
+        languages,
+        experience,
+        availability,
+        hourly_credits,
+        description
+      )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
@@ -102,7 +133,11 @@ router.post("/", authMiddleware, async (req, res) => {
 });
 
 
+// ========================================
 // GET /api/mentors
+// GET ALL MENTORS
+// ========================================
+
 router.get("/", async (req, res) => {
   try {
     const [mentors] = await db.execute(
@@ -120,7 +155,8 @@ router.get("/", async (req, res) => {
         mp.hourly_credits,
         mp.description
       FROM mentor_profiles mp
-      JOIN users u ON mp.user_id = u.id
+      INNER JOIN users u ON mp.user_id = u.id
+      WHERE u.role IN ('mentor', 'both')
       ORDER BY mp.created_at DESC`
     );
 
@@ -141,7 +177,11 @@ router.get("/", async (req, res) => {
 });
 
 
+// ========================================
 // GET /api/mentors/search
+// SEARCH MENTORS
+// ========================================
+
 router.get("/search", async (req, res) => {
   try {
     const { skill, language, location, minExperience } = req.query;
@@ -160,8 +200,8 @@ router.get("/search", async (req, res) => {
         mp.hourly_credits,
         mp.description
       FROM mentor_profiles mp
-      JOIN users u ON mp.user_id = u.id
-      WHERE 1=1
+      INNER JOIN users u ON mp.user_id = u.id
+      WHERE u.role IN ('mentor', 'both')
     `;
 
     const values = [];
@@ -195,6 +235,8 @@ router.get("/search", async (req, res) => {
       values.push(experience);
     }
 
+    query += " ORDER BY mp.created_at DESC";
+
     const [mentors] = await db.execute(query, values);
 
     return res.status(200).json({
@@ -214,7 +256,11 @@ router.get("/search", async (req, res) => {
 });
 
 
+// ========================================
 // GET /api/mentors/:id
+// GET SINGLE MENTOR
+// ========================================
+
 router.get("/:id", async (req, res) => {
   try {
     const mentorId = Number(req.params.id);
@@ -242,8 +288,9 @@ router.get("/:id", async (req, res) => {
         mp.description,
         mp.created_at
       FROM mentor_profiles mp
-      JOIN users u ON mp.user_id = u.id
-      WHERE mp.id = ?`,
+      INNER JOIN users u ON mp.user_id = u.id
+      WHERE mp.id = ?
+      AND u.role IN ('mentor', 'both')`,
       [mentorId]
     );
 
@@ -271,7 +318,11 @@ router.get("/:id", async (req, res) => {
 });
 
 
+// ========================================
 // PUT /api/mentors
+// UPDATE MENTOR PROFILE
+// ========================================
+
 router.put("/", authMiddleware, async (req, res) => {
   try {
     const {
@@ -284,6 +335,24 @@ router.put("/", authMiddleware, async (req, res) => {
       description,
     } = req.body;
 
+    const userId = req.user.id;
+
+    // Verify user role
+    const [users] = await db.execute(
+      "SELECT role FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (
+      users.length === 0 ||
+      !["mentor", "both"].includes(users[0].role)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Only mentors can update mentor profiles",
+      });
+    }
+
     const fields = [];
     const values = [];
 
@@ -294,6 +363,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Invalid headline",
         });
       }
+
       fields.push("headline = ?");
       values.push(headline.trim());
     }
@@ -305,6 +375,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Skills cannot be empty",
         });
       }
+
       fields.push("skills = ?");
       values.push(skills.trim());
     }
@@ -316,6 +387,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Languages cannot be empty",
         });
       }
+
       fields.push("languages = ?");
       values.push(languages.trim());
     }
@@ -327,6 +399,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Experience must be a non-negative integer",
         });
       }
+
       fields.push("experience = ?");
       values.push(experience);
     }
@@ -338,6 +411,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Invalid availability",
         });
       }
+
       fields.push("availability = ?");
       values.push(availability.trim());
     }
@@ -349,6 +423,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Hourly credits must be at least 1",
         });
       }
+
       fields.push("hourly_credits = ?");
       values.push(hourly_credits);
     }
@@ -360,6 +435,7 @@ router.put("/", authMiddleware, async (req, res) => {
           message: "Invalid description",
         });
       }
+
       fields.push("description = ?");
       values.push(description.trim());
     }
@@ -373,7 +449,7 @@ router.put("/", authMiddleware, async (req, res) => {
 
     const [existing] = await db.execute(
       "SELECT id FROM mentor_profiles WHERE user_id = ?",
-      [req.user.id]
+      [userId]
     );
 
     if (existing.length === 0) {
@@ -383,7 +459,7 @@ router.put("/", authMiddleware, async (req, res) => {
       });
     }
 
-    values.push(req.user.id);
+    values.push(userId);
 
     await db.execute(
       `UPDATE mentor_profiles
@@ -394,7 +470,7 @@ router.put("/", authMiddleware, async (req, res) => {
 
     const [updated] = await db.execute(
       "SELECT * FROM mentor_profiles WHERE user_id = ?",
-      [req.user.id]
+      [userId]
     );
 
     return res.status(200).json({
@@ -412,6 +488,5 @@ router.put("/", authMiddleware, async (req, res) => {
     });
   }
 });
-
 
 module.exports = router;

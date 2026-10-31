@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import FindMentors from "./pages/FindMentors";
 import MySessions from "./pages/MySessions";
@@ -83,6 +82,7 @@ function App() {
   const [mentorsLoading, setMentorsLoading] = useState(true);
   const [mentorError, setMentorError] = useState("");
   const [dashboardBookings, setDashboardBookings] = useState([]);
+  const [walletBalance, setWalletBalance] = useState(0);
 
   // Connect Socket.io only after the user is logged in.
   useEffect(() => {
@@ -139,8 +139,24 @@ function App() {
         setMentorsLoading(false);
       }
 
+      const token = localStorage.getItem("token");
+
       try {
-        const token = localStorage.getItem("token");
+        const walletResponse = await fetch(`${API_URL}/api/wallet`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const walletData = await walletResponse.json();
+        if (walletResponse.ok && walletData.success && walletData.wallet) {
+          setWalletBalance(Number(walletData.wallet.balance) || 0);
+        } else {
+          setWalletBalance(0);
+        }
+      } catch (error) {
+        console.error("Unable to load wallet balance:", error);
+        setWalletBalance(0);
+      }
+
+      try {
         const role = String(authUser.role || "").toLowerCase();
         const endpoint = ["mentor", "both"].includes(role)
           ? "/api/bookings/received"
@@ -161,6 +177,35 @@ function App() {
     };
     loadDashboardData();
   }, [authUser]);
+
+  const completedBookings = dashboardBookings.filter(
+    (booking) => String(booking.status || "").toLowerCase() === "completed"
+  );
+
+  const peopleHelped = new Set(
+    completedBookings
+      .map((booking) => {
+        const role = String(authUser?.role || "").toLowerCase();
+        return ["mentor", "both"].includes(role)
+          ? booking.student_id
+          : booking.mentor_id;
+      })
+      .filter((id) => id !== undefined && id !== null)
+      .map(String)
+  ).size;
+
+  const learningHours = completedBookings.reduce((total, booking) => {
+    const toMinutes = (value) => {
+      if (!value) return 0;
+      const parts = String(value).split(":").map(Number);
+      if (parts.length < 2 || parts.some(Number.isNaN)) return 0;
+      return parts[0] * 60 + parts[1] + (parts[2] || 0) / 60;
+    };
+    const start = toMinutes(booking.start_time);
+    const end = toMinutes(booking.end_time);
+    const duration = end >= start ? end - start : 0;
+    return total + duration;
+  }, 0) / 60;
 
   const filteredMentors = mentors.filter((mentor) =>
     `${mentor.name} ${mentor.role} ${mentor.skills.join(" ")}`
@@ -466,7 +511,7 @@ function App() {
                 <StatCard
                   icon={Wallet}
                   title="Available Credits"
-                  value="25"
+                  value={walletBalance}
                   subtitle="Ready to spend"
                   color="violet"
                 />
@@ -474,7 +519,7 @@ function App() {
                 <StatCard
                   icon={CalendarDays}
                   title="Sessions Completed"
-                  value="12"
+                  value={completedBookings.length}
                   subtitle="Learning milestones"
                   color="blue"
                 />
@@ -482,7 +527,7 @@ function App() {
                 <StatCard
                   icon={Users}
                   title="People Helped"
-                  value="8"
+                  value={peopleHelped}
                   subtitle="Knowledge shared"
                   color="emerald"
                 />
@@ -490,7 +535,7 @@ function App() {
                 <StatCard
                   icon={TrendingUp}
                   title="Learning Hours"
-                  value="18.5"
+                  value={learningHours.toFixed(1)}
                   subtitle="Time invested"
                   color="orange"
                 />
@@ -513,7 +558,7 @@ function App() {
                       </div>
 
                       <h2 className="mt-3 text-4xl font-bold">
-                        25 Credits
+                        {walletBalance} Credits
                       </h2>
 
                       <p className="mt-2 text-sm text-violet-100">

@@ -5,6 +5,8 @@ const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
+const SESSION_CREDITS = 5;
+
 // ==========================================
 // 1. POST /api/bookings
 // Create a new booking request
@@ -18,7 +20,6 @@ router.post("/", authMiddleware, async (req, res) => {
       session_date,
       start_time,
       end_time,
-      credits,
     } = req.body;
 
     const studentId = Number(req.user.id);
@@ -49,7 +50,6 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Validate date and time formats
     if (
       typeof session_date !== "string" ||
       !/^\d{4}-\d{2}-\d{2}$/.test(session_date) ||
@@ -64,7 +64,6 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Validate actual calendar date
     const parsedDate = new Date(`${session_date}T00:00:00Z`);
 
     if (
@@ -86,7 +85,6 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Normalize times
     const normalizedStart =
       start_time.length === 5 ? `${start_time}:00` : start_time;
 
@@ -100,17 +98,6 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Validate credits
-    const bookingCredits = credits === undefined ? 1 : Number(credits);
-
-    if (!Number.isInteger(bookingCredits) || bookingCredits < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Credits must be a positive integer",
-      });
-    }
-
-    // Prevent self-booking
     if (studentId === mentorId) {
       return res.status(400).json({
         success: false,
@@ -118,7 +105,7 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Check mentor exists
+    // Check that mentor profile exists
     const [mentors] = await db.execute(
       "SELECT user_id FROM mentor_profiles WHERE user_id = ?",
       [mentorId]
@@ -131,7 +118,9 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // Create booking
+    // Fixed cost: 5 credits per session
+    const bookingCredits = SESSION_CREDITS;
+
     const [result] = await db.execute(
       `INSERT INTO bookings
       (
@@ -161,6 +150,7 @@ router.post("/", authMiddleware, async (req, res) => {
       success: true,
       message: "Booking request created successfully",
       bookingId: result.insertId,
+      credits: bookingCredits,
       status: "pending",
     });
   } catch (error) {
@@ -383,7 +373,7 @@ router.get("/my-bookings", authMiddleware, async (req, res) => {
 
 // ==========================================
 // 6. PUT /api/bookings/:id/complete
-// Complete session and transfer credits
+// Complete session and transfer 5 credits
 // ==========================================
 router.put("/:id/complete", authMiddleware, async (req, res) => {
   let connection;
@@ -407,7 +397,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
 
     // Lock booking row to prevent duplicate completion
     const [bookings] = await connection.execute(
-      `SELECT id, student_id, mentor_id, credits, status
+      `SELECT id, student_id, mentor_id, status
        FROM bookings
        WHERE id = ?
        FOR UPDATE`,
@@ -437,7 +427,17 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       });
     }
 
-    // Only accepted bookings can be completed
+    // Prevent completing the same booking more than once
+    if (booking.status === "completed") {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(409).json({
+        success: false,
+        message: "This session has already been completed",
+      });
+    }
+
     if (booking.status !== "accepted") {
       await connection.rollback();
       transactionStarted = false;
@@ -449,7 +449,17 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
     }
 
     const studentId = Number(booking.student_id);
-    const credits = Number(booking.credits);
+    const credits = SESSION_CREDITS;
+
+    if (studentId === mentorId) {
+      await connection.rollback();
+      transactionStarted = false;
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid booking participants",
+      });
+    }
 
     // Lock both wallets
     const [wallets] = await connection.execute(
@@ -475,11 +485,11 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
 
       return res.status(404).json({
         success: false,
-        message: "Student or mentor wallet not found",
+        message:
+          "Student or mentor wallet not found. Please create the missing wallet first.",
       });
     }
 
-    // Check student balance
     const studentBalance = Number(studentWallet.balance);
 
     if (studentBalance < credits) {
@@ -494,7 +504,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       });
     }
 
-    // Deduct credits from student wallet
+    // Deduct 5 credits from learner
     await connection.execute(
       `UPDATE wallets
        SET balance = balance - ?
@@ -502,7 +512,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       [credits, studentId]
     );
 
-    // Add credits to mentor wallet
+    // Add 5 credits to mentor
     await connection.execute(
       `UPDATE wallets
        SET balance = balance + ?
@@ -510,7 +520,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       [credits, mentorId]
     );
 
-    // Add student spending transaction
+    // Record learner spending
     await connection.execute(
       `INSERT INTO credit_transactions
        (user_id, booking_id, transaction_type, credits, description)
@@ -523,7 +533,7 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       ]
     );
 
-    // Add mentor earning transaction
+    // Record mentor earning
     await connection.execute(
       `INSERT INTO credit_transactions
        (user_id, booking_id, transaction_type, credits, description)
@@ -536,13 +546,17 @@ router.put("/:id/complete", authMiddleware, async (req, res) => {
       ]
     );
 
-    // Mark booking as completed
-    await connection.execute(
+    // Mark booking completed
+    const [updateResult] = await connection.execute(
       `UPDATE bookings
-       SET status = 'completed'
+       SET status = 'completed', credits = ?
        WHERE id = ? AND status = 'accepted'`,
-      [bookingId]
+      [credits, bookingId]
     );
+
+    if (updateResult.affectedRows !== 1) {
+      throw new Error("Booking status could not be updated");
+    }
 
     // Commit all changes together
     await connection.commit();
@@ -595,7 +609,6 @@ router.get(
         });
       }
 
-      // Find booking
       const [rows] = await db.execute(
         `SELECT id, student_id, mentor_id, status
          FROM bookings
@@ -612,7 +625,6 @@ router.get(
 
       const booking = rows[0];
 
-      // Check whether user is the student or mentor
       const isParticipant =
         Number(booking.student_id) === userId ||
         Number(booking.mentor_id) === userId;
@@ -624,7 +636,6 @@ router.get(
         });
       }
 
-      // Only accepted bookings can access collaboration
       if (booking.status !== "accepted") {
         return res.status(403).json({
           success: false,
@@ -649,5 +660,7 @@ router.get(
   }
 );
 
+// ==========================================
 // Export router
+// ==========================================
 module.exports = router;
