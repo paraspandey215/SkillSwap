@@ -17,36 +17,48 @@ const walletRoutes = require("./routes/walletRoutes");
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 
 const app = express();
-
-// Create HTTP server
 const server = http.createServer(app);
 
 // ==========================================
-// MIDDLEWARE
+// 1. CORS CONFIGURATION
 // ==========================================
 
-app.use(
-  cors({
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-  })
-);
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://skill-swap-tau-ashen.vercel.app",
+  ...(process.env.CLIENT_URL
+    ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
+    : []),
+];
 
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header (health checks, etc.)
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.log("Blocked CORS origin:", origin);
+    return callback(new Error("Origin not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ==========================================
-// SOCKET.IO INITIALIZATION
+// 2. SOCKET.IO INITIALIZATION
 // ==========================================
 
 const io = new Server(server, {
-  cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"],
-  },
+  cors: corsOptions,
 });
 
 // ==========================================
-// 1. SOCKET.IO JWT AUTHENTICATION
+// 3. SOCKET.IO JWT AUTHENTICATION
 // ==========================================
 
 io.use((socket, next) => {
@@ -63,10 +75,7 @@ io.use((socket, next) => {
       );
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     if (!Number.isSafeInteger(Number(decoded.id))) {
       return next(new Error("Invalid user information"));
@@ -84,7 +93,7 @@ io.use((socket, next) => {
 });
 
 // ==========================================
-// 2. SOCKET.IO CONNECTION
+// 4. SOCKET.IO CONNECTION
 // ==========================================
 
 io.on("connection", (socket) => {
@@ -93,11 +102,10 @@ io.on("connection", (socket) => {
     socket.id
   );
 
-  // Track rooms authorized for this socket
   const authorizedRooms = new Set();
 
   // ==========================================
-  // 3. JOIN ROOM WITH BOOKING AUTHORIZATION
+  // JOIN ROOM WITH BOOKING AUTHORIZATION
   // ==========================================
 
   socket.on("join-room", async ({ bookingId, initialCode } = {}) => {
@@ -115,7 +123,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Verify booking and participant authorization
       const [bookings] = await db.execute(
         `SELECT id, student_id, mentor_id, status
          FROM bookings
@@ -144,7 +151,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Only accepted bookings can access collaboration
       if (booking.status !== "accepted") {
         socket.emit("room-error", {
           message: "Only accepted bookings allow collaboration.",
@@ -152,10 +158,8 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Generate room ID on server
       const roomId = `booking-${cleanBookingId}`;
 
-      // Create room only if it does not already exist
       await db.execute(
         `INSERT IGNORE INTO collaboration_rooms
          (room_id, code)
@@ -163,7 +167,6 @@ io.on("connection", (socket) => {
         [roomId, initialCode]
       );
 
-      // Load saved code from MySQL
       const [rooms] = await db.execute(
         `SELECT code
          FROM collaboration_rooms
@@ -178,7 +181,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Leave previously joined collaboration rooms
       for (const previousRoom of authorizedRooms) {
         socket.leave(previousRoom);
 
@@ -189,7 +191,6 @@ io.on("connection", (socket) => {
 
       authorizedRooms.clear();
 
-      // Join authorized room
       await socket.join(roomId);
       authorizedRooms.add(roomId);
 
@@ -197,18 +198,15 @@ io.on("connection", (socket) => {
         `User ${userId} joined authorized room: ${roomId}`
       );
 
-      // Send saved code to participant
       socket.emit("room-state", {
         code: rooms[0].code,
         bookingId: cleanBookingId,
         roomId,
       });
 
-      // Notify other participant
       socket.to(roomId).emit("user-joined", {
         message: "A new participant joined the room",
       });
-
     } catch (error) {
       console.error("Join room error:", error.message);
 
@@ -219,7 +217,7 @@ io.on("connection", (socket) => {
   });
 
   // ==========================================
-  // 4. CODE CHANGE WITH AUTHORIZATION
+  // CODE CHANGE WITH AUTHORIZATION
   // ==========================================
 
   socket.on("code-change", async ({ bookingId, code } = {}) => {
@@ -236,7 +234,6 @@ io.on("connection", (socket) => {
 
       const roomId = `booking-${cleanBookingId}`;
 
-      // Verify this socket joined this authorized room
       if (
         !authorizedRooms.has(roomId) ||
         !socket.rooms.has(roomId)
@@ -244,7 +241,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Recheck booking status and participant authorization
       const [bookings] = await db.execute(
         `SELECT student_id, mentor_id, status
          FROM bookings
@@ -275,7 +271,6 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Save latest code in MySQL
       const [result] = await db.execute(
         `UPDATE collaboration_rooms
          SET code = ?
@@ -290,11 +285,9 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Broadcast updated code to other participants
       socket.to(roomId).emit("code-update", {
         code,
       });
-
     } catch (error) {
       console.error("Code save error:", error.message);
 
@@ -305,7 +298,7 @@ io.on("connection", (socket) => {
   });
 
   // ==========================================
-  // 5. LEAVE COLLABORATION ROOM
+  // LEAVE COLLABORATION ROOM
   // ==========================================
 
   socket.on("leave-room", ({ bookingId } = {}) => {
@@ -340,7 +333,7 @@ io.on("connection", (socket) => {
   });
 
   // ==========================================
-  // 6. DISCONNECT
+  // DISCONNECT
   // ==========================================
 
   socket.on("disconnect", () => {
@@ -352,7 +345,7 @@ io.on("connection", (socket) => {
 });
 
 // ==========================================
-// 7. API ROUTES
+// 5. API ROUTES
 // ==========================================
 
 app.use("/api/auth", authRoutes);
@@ -362,11 +355,8 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
 
-// Leaderboard API
-app.use("/api/leaderboard", leaderboardRoutes);
-
 // ==========================================
-// 8. TEST ROUTE
+// 6. TEST ROUTE
 // ==========================================
 
 app.get("/", (req, res) => {
@@ -384,7 +374,7 @@ app.get("/", (req, res) => {
 });
 
 // ==========================================
-// 9. START SERVER
+// 7. START SERVER
 // ==========================================
 
 const PORT = process.env.PORT || 5000;
@@ -392,13 +382,14 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   try {
     if (!process.env.JWT_SECRET) {
-      throw new Error("JWT_SECRET is missing in .env");
+      throw new Error("JWT_SECRET is missing in environment variables");
     }
 
     await connectDB();
 
-    server.listen(PORT, () => {
+    server.listen(PORT, "0.0.0.0", () => {
       console.log(`SkillSwap server running on port ${PORT}`);
+      console.log("TiDB Cloud database connected.");
       console.log("Socket.io is ready!");
       console.log("Socket.io JWT Authentication is enabled!");
       console.log("Booking-based Room Authorization is enabled!");
@@ -406,8 +397,8 @@ const startServer = async () => {
       console.log("Initial Code Synchronization is enabled!");
       console.log("MySQL Code Persistence is enabled!");
       console.log("Leaderboard API is enabled!");
+      console.log("Allowed frontend origins:", allowedOrigins);
     });
-
   } catch (error) {
     console.error("Server startup failed:", error.message);
     process.exit(1);
