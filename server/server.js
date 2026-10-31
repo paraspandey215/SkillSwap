@@ -23,27 +23,39 @@ const server = http.createServer(app);
 // 1. CORS CONFIGURATION
 // ==========================================
 
+const normalizeOrigin = (url) => url.trim().replace(/\/+$/, "");
+
 const allowedOrigins = [
   "http://localhost:5173",
   "https://skill-swap-tau-ashen.vercel.app",
   ...(process.env.CLIENT_URL
-    ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
+    ? process.env.CLIENT_URL.split(",")
     : []),
-];
+]
+  .filter(Boolean)
+  .map(normalizeOrigin);
+
+const checkOrigin = (origin, callback) => {
+  if (!origin) {
+    return callback(null, true);
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+
+  if (allowedOrigins.includes(normalizedOrigin)) {
+    return callback(null, true);
+  }
+
+  console.log("Blocked CORS origin:", origin);
+  return callback(null, false);
+};
 
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests without an Origin header (health checks, etc.)
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    console.log("Blocked CORS origin:", origin);
-    return callback(new Error("Origin not allowed by CORS"));
-  },
+  origin: checkOrigin,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
+  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
@@ -104,9 +116,7 @@ io.on("connection", (socket) => {
 
   const authorizedRooms = new Set();
 
-  // ==========================================
   // JOIN ROOM WITH BOOKING AUTHORIZATION
-  // ==========================================
 
   socket.on("join-room", async ({ bookingId, initialCode } = {}) => {
     try {
@@ -207,6 +217,7 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("user-joined", {
         message: "A new participant joined the room",
       });
+
     } catch (error) {
       console.error("Join room error:", error.message);
 
@@ -288,6 +299,7 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("code-update", {
         code,
       });
+
     } catch (error) {
       console.error("Code save error:", error.message);
 
@@ -382,7 +394,9 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   try {
     if (!process.env.JWT_SECRET) {
-      throw new Error("JWT_SECRET is missing in environment variables");
+      throw new Error(
+        "JWT_SECRET is missing in environment variables"
+      );
     }
 
     await connectDB();
@@ -399,6 +413,7 @@ const startServer = async () => {
       console.log("Leaderboard API is enabled!");
       console.log("Allowed frontend origins:", allowedOrigins);
     });
+
   } catch (error) {
     console.error("Server startup failed:", error.message);
     process.exit(1);
