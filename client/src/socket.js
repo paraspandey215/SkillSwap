@@ -1,17 +1,12 @@
 
 import { io } from "socket.io-client";
 
-const socket = io("http://localhost:5000", {
+const socket = io(import.meta.env.VITE_API_URL, {
   autoConnect: false,
   transports: ["websocket"],
-
-  // Send JWT token when Socket.io connects
   auth: (callback) => {
     const token = localStorage.getItem("token");
-
-    callback({
-      token: token,
-    });
+    callback({ token });
   },
 });
 
