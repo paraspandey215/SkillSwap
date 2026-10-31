@@ -13,7 +13,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
-const API_URL = "http://localhost:5000";
+const API_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, "");
 
 const COLORS = [
   "bg-violet-100 text-violet-700",

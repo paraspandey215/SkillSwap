@@ -20,7 +20,7 @@ import {
 const filters = ["All", "Earned", "Spent"];
 
 function CreditWallet() {
-  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+  const API_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, "");
   const [activeFilter, setActiveFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [selectedTransaction, setSelectedTransaction] = useState(null);

@@ -11,7 +11,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_URL = import.meta.env.VITE_API_URL?.replace(/\/+$/, "");
 
 const colors = [
   "bg-amber-100 text-amber-700",
